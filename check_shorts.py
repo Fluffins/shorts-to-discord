@@ -3,7 +3,7 @@ Posts new YouTube Shorts from one channel to a Discord channel as real video fil
 Runs on GitHub Actions - nothing touches your own PC.
 
 Required environment variables (set as GitHub secrets):
-  YT_CHANNEL_ID        e.g. UCxxxxxxxxxxxxxxxxxxxxxx
+  YT_CHANNEL_ID        channel ID (UCxxxx...), @handle, or channel URL
   DISCORD_WEBHOOK_URL  the webhook URL from your Discord channel
 Optional:
   MAX_UPLOAD_MB        upload size cap, default 9.5 (Discord's standard limit is 10 MB)
@@ -43,8 +43,32 @@ def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
 
 
-def fetch_feed():
-    """Return [(video_id, title)] oldest first."""
+def channel_base():
+    """Accepts a channel ID (UC...), an @handle, or a full channel URL."""
+    c = CHANNEL_ID
+    if c.startswith("http"):
+        return c.rstrip("/").removesuffix("/shorts").removesuffix("/videos")
+    if c.startswith("@"):
+        return f"https://www.youtube.com/{c}"
+    return f"https://www.youtube.com/channel/{c}"
+
+
+def fetch_shorts_tab():
+    """List the newest Shorts straight from the channel's Shorts tab."""
+    opts = {"quiet": True, "no_warnings": True,
+            "extract_flat": "in_playlist", "playlistend": 15}
+    if COOKIES:
+        opts["cookiefile"] = COOKIES
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(channel_base() + "/shorts", download=False)
+    items = [(e["id"], e.get("title") or "") for e in (info.get("entries") or []) if e.get("id")]
+    return list(reversed(items))  # oldest first
+
+
+def fetch_rss():
+    """Backup: the channel RSS feed (only works with a UC... channel ID)."""
+    if not CHANNEL_ID.startswith("UC"):
+        raise RuntimeError("RSS backup needs a UC... channel ID")
     with urllib.request.urlopen(FEED_URL, timeout=30) as resp:
         root = ET.fromstring(resp.read())
     items = []
@@ -53,6 +77,20 @@ def fetch_feed():
         title = entry.find("a:title", NS).text or ""
         items.append((vid, title))
     return list(reversed(items))
+
+
+def fetch_feed():
+    """Return [(video_id, title)] oldest first, trying the Shorts tab then RSS."""
+    errors = []
+    for name, fn in (("Shorts tab", fetch_shorts_tab), ("RSS feed", fetch_rss)):
+        try:
+            items = fn()
+            print(f"Got {len(items)} videos from {name}")
+            return items
+        except Exception as e:
+            errors.append(f"{name}: {e}")
+            print(f"{name} failed: {e}")
+    raise RuntimeError("Could not list the channel's videos. " + " | ".join(errors))
 
 
 def is_short(vid, info=None):
