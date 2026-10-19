@@ -10,6 +10,7 @@ Optional:
 """
 
 import glob
+import re
 import json
 import os
 import subprocess
@@ -28,7 +29,6 @@ STATE_FILE = Path("posted.json")
 COOKIES = "cookies.txt" if Path("cookies.txt").exists() else None
 MAX_ATTEMPTS = 5  # give up on a video after this many failed runs
 
-FEED_URL = f"https://www.youtube.com/feeds/videos.xml?channel_id={CHANNEL_ID}"
 NS = {"a": "http://www.w3.org/2005/Atom", "yt": "http://www.youtube.com/xml/schemas/2015"}
 
 
@@ -44,13 +44,20 @@ def save_state(state):
 
 
 def channel_base():
-    """Accepts a channel ID (UC...), an @handle, or a full channel URL."""
-    c = CHANNEL_ID
-    if c.startswith("http"):
-        return c.rstrip("/").removesuffix("/shorts").removesuffix("/videos")
-    if c.startswith("@"):
+    """Accepts a channel ID (UC...), an @handle (with or without @), or any channel link."""
+    c = CHANNEL_ID.strip().strip('"').strip("'").strip()
+    c = re.sub(r"^(https?://)?(www\.|m\.)?youtube\.com/", "", c, flags=re.I)
+    c = c.split("?")[0].strip("/")
+    for suffix in ("/shorts", "/videos", "/featured", "/streams", "/about"):
+        if c.lower().endswith(suffix):
+            c = c[: -len(suffix)]
+    if c.lower().startswith("channel/"):
+        c = c.split("/", 1)[1]
+    if re.fullmatch(r"UC[\w-]{22}", c):
+        return f"https://www.youtube.com/channel/{c}"
+    if c.lower().startswith(("c/", "user/")):
         return f"https://www.youtube.com/{c}"
-    return f"https://www.youtube.com/channel/{c}"
+    return f"https://www.youtube.com/@{c.lstrip('@')}"
 
 
 def fetch_shorts_tab():
@@ -67,9 +74,11 @@ def fetch_shorts_tab():
 
 def fetch_rss():
     """Backup: the channel RSS feed (only works with a UC... channel ID)."""
-    if not CHANNEL_ID.startswith("UC"):
+    base = channel_base()
+    if "/channel/UC" not in base:
         raise RuntimeError("RSS backup needs a UC... channel ID")
-    with urllib.request.urlopen(FEED_URL, timeout=30) as resp:
+    feed = f"https://www.youtube.com/feeds/videos.xml?channel_id={base.rsplit('/', 1)[1]}"
+    with urllib.request.urlopen(feed, timeout=30) as resp:
         root = ET.fromstring(resp.read())
     items = []
     for entry in root.findall("a:entry", NS):
@@ -81,6 +90,7 @@ def fetch_rss():
 
 def fetch_feed():
     """Return [(video_id, title)] oldest first, trying the Shorts tab then RSS."""
+    print(f"Channel: {channel_base()}")
     errors = []
     for name, fn in (("Shorts tab", fetch_shorts_tab), ("RSS feed", fetch_rss)):
         try:
