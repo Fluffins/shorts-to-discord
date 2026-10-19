@@ -1,0 +1,56 @@
+name: Shorts to Discord
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 minutes (UTC)
+  workflow_dispatch:          # lets you run it manually from the Actions tab
+
+permissions:
+  contents: write
+
+concurrency:
+  group: shorts-to-discord
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # yt-dlp needs a JavaScript runtime for YouTube
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
+          pip install -q -U "yt-dlp[default]" requests
+
+      - name: Write YouTube cookies (only if you added the secret)
+        env:
+          YT_COOKIES: ${{ secrets.YT_COOKIES }}
+        run: |
+          if [ -n "$YT_COOKIES" ]; then printf '%s' "$YT_COOKIES" > cookies.txt; fi
+
+      - name: Check for new Shorts and post them
+        env:
+          YT_CHANNEL_ID: ${{ secrets.YT_CHANNEL_ID }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          MAX_UPLOAD_MB: ${{ vars.MAX_UPLOAD_MB }}
+        run: python check_shorts.py
+
+      - name: Save posted list
+        if: always()
+        run: |
+          git config user.name "shorts-bot"
+          git config user.email "shorts-bot@users.noreply.github.com"
+          git add posted.json 2>/dev/null || true
+          git diff --cached --quiet || (git commit -m "Update posted list" && git push)
