@@ -42,7 +42,7 @@ jobs:
 
       - name: Check for new Shorts and post them
         env:
-          YT_CHANNEL_ID: ${{ secrets.YT_CHANNEL_ID }}
+          YT_CHANNEL_ID: "https://www.youtube.com/@DailyWarcraftFacts"
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           MAX_UPLOAD_MB: ${{ vars.MAX_UPLOAD_MB }}
         run: python check_shorts.py
